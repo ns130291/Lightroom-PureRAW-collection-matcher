@@ -6,6 +6,7 @@ local LrDialogs = import 'LrDialogs'
 local LrFileUtils = import 'LrFileUtils'
 local LrPathUtils = import 'LrPathUtils'
 local LrLogger = import 'LrLogger'
+local LrProgressScope = import 'LrProgressScope'
 
 local logger = LrLogger('PureRAW_collection_matcher')
 logger:enable("logfile")
@@ -109,10 +110,10 @@ local developSettings = {
 	"ColorNoiseReductionDetail",
 	"ColorNoiseReductionSmoothness",
 	"ColorNoiseReduction",
-	
+
 	"AutoLateralCA",
 	"LensProfileEnable",
-	"LensProfileSetup",	
+	"LensProfileSetup",
 	"LensProfileFilename",
 	"LensProfileName",
 	"LensProfileIsEmbedded",
@@ -156,7 +157,7 @@ function PureRawMatcher.sortImages()
 	local sources = catalog:getActiveSources()
 	local count = 0
 	for _ in pairs(sources) do count = count + 1 end
-	
+
 	if count == 1 then
 		local activeSource = sources[1]
 		if (type(activeSource) ~= "table") or (activeSource:type() ~= "LrCollection") then
@@ -171,28 +172,35 @@ function PureRawMatcher.sortImages()
 		LrDialogs.message( "PureRAW collection match failed", "Select only one collection", "warning" )
 		return
 	end
-	
-	local sourceCollection = sources[1]	
+
+	local sourceCollection = sources[1]
 	local collectionSet = nil
 	catalog:withWriteAccessDo("Create collection set", function()
 		collectionSet = catalog:createCollectionSet("PureRAW matched", nil, true)
 	end)
-	
+
 	local collection = nil
 	catalog:withWriteAccessDo("Create new collection", function()
 		collection = catalog:createCollection(sourceCollection:getName(), collectionSet, true)
 	end)
 
+	local progressScope = LrProgressScope({title = "Matching PureRAW photos"})
+	progressScope:setCancelable(true)
+
 	catalog:withWriteAccessDo("Match PureRAW", function()
 		local photos = sourceCollection:getPhotos()
-		for _, photo in ipairs( photos ) do
+		for i, photo in ipairs( photos ) do
+			if progressScope:isCanceled() then
+				break
+			end
+
 			local skippedMetadata = "";
-			
+
 			local sourceFile = photo:getRawMetadata("path")
 			local path = LrPathUtils.parent(sourceFile)
 			local targetFile = LrPathUtils.child(LrPathUtils.child(path, "DxO"), LrPathUtils.removeExtension(LrPathUtils.leafName(sourceFile)) .. "-" .. LrPathUtils.extension(sourceFile) .. "_DxO_DeepPRIME.dng")
 			log("target file: %q", targetFile)
-			
+
 			if LrFileUtils.exists(targetFile) then
 				local newPhoto = catalog:findPhotoByPath(targetFile, false)
 				if not newPhoto then
@@ -214,9 +222,9 @@ function PureRawMatcher.sortImages()
 					else
 						skippedMetadata = skippedMetadata .. " " .. metaKey
 					end
-				end				
+				end
 				-- log("metadata not allowed: %q", skippedMetadata)
-				
+
 				-- copy develop settings
 				local developSettings = photo:getDevelopSettings()
 				-- log("developSettings: %q", dump(developSettings))
@@ -225,15 +233,18 @@ function PureRawMatcher.sortImages()
 				-- log("developSettings: %q", dump(developSettings))
 				-- log("developSettings: %q", size(developSettings))
 				newPhoto:applyDevelopSettings(developSettings, "PureRAW matching")
-				
+
 				collection:addPhotos({newPhoto})
 			else
 				-- add current photo to collection
 				collection:addPhotos({photo})
 			end
+
+			progressScope:setPortionComplete(i, #photos)
 		end
 	end)
-	
+
+	progressScope:done()
 	LrDialogs.message( "PureRAW collection matcher", "Matching finished", "info" )
 end
 
